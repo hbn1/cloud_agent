@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip list *)",
+      "Bash(python -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(/d/Anaconda_envs/envs/multi_agent/python.exe -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(/d/Anaconda_envs/envs/multi_agent/python.exe -c \"from langchain_community.document_loaders import TextLoader; print\\('langchain OK'\\)\")",
+      "Bash(/d/Anaconda_envs/envs/multi_agent/python.exe -m pip install -r d:/desktop/cloud_agent/agent/requirements.txt)",
+      "Bash(tail -20 \"/c/Users/黄博阳/.claude/projects/d--desktop-cloud-agent/fada4f77-3e40-49c8-801e-6e5b9a96ec11/tool-results/by2zu2njl.txt\")",
+      "Read(//c/Users/黄博阳/.claude/projects/d--desktop-cloud-agent/fada4f77-3e40-49c8-801e-6e5b9a96ec11/tool-results/**)",
+      "Bash(/d/Anaconda_envs/envs/multi_agent/python.exe -c ' *)",
+      "Bash(/d/Anaconda_envs/envs/multi_agent/python.exe -m pip show python-dotenv)",
+      "Bash(ls /d/Anaconda_envs/envs/multi_agent/lib/python3.10/site-packages/ | grep -i dotenv 2>&1)",
+      "Read(//d/Anaconda_envs/envs/multi_agent/lib/python3.10/**)",
+      "Bash(/d/Anaconda_envs/envs/multi_agent/bin/python.exe -m pip show python-dotenv)",
+      "Bash(/d/Anaconda_envs/envs/multi_agent/bin/python.exe -c \"import sys; print\\(sys.path\\)\")",
+      "Bash(ls -d /d/Anaconda_envs/envs/multi_agent/lib/*/site-packages 2>&1)",
+      "Read(//d/Anaconda_envs/envs/multi_agent/lib/**)",
+      "Bash(ls -la /d/Anaconda_envs/envs/multi_agent/ 2>&1)",
+      "Read(//d/Anaconda_envs/envs/multi_agent//**)",
+      "Bash(find /d/Anaconda_envs/envs/multi_agent/ -name \"site-packages\" -type d 2>&1)"
+    ]
+  }
+}

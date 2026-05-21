@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/d/Anaconda_envs/envs/multi_agent/python.exe -m uvicorn app_main:app --host 0.0.0.0 --port 5000 --reload)",
+      "Bash(/d/Anaconda_envs/envs/multi_agent/python.exe -m pip install langchain-neo4j)",
+      "Bash(sleep 8 && cat \"/c/Users/黄博阳/AppData/Local/Temp/claude/d--desktop-cloud-agent/fada4f77-3e40-49c8-801e-6e5b9a96ec11/tasks/b2fwagpjz.output\")",
+      "Read(//c/Users/黄博阳/AppData/Local/Temp/claude/d--desktop-cloud-agent/fada4f77-3e40-49c8-801e-6e5b9a96ec11/tasks/**)",
+      "Bash(/d/Anaconda_envs/envs/multi_agent/python.exe -c ' *)",
+      "Bash(curl -s http://localhost:5000/api/chat -X POST -H \"Content-Type: application/json\" -d \"{\\\\\"message\\\\\":\\\\\"你好\\\\\",\\\\\"user_id\\\\\":\\\\\"test\\\\\"}\" --connect-timeout 5 --max-time 30)",
+      "Bash(tasklist //FI \"IMAGENAME eq python.exe\")",
+      "Bash(curl -s http://localhost:5000/api/chat -X POST -H \"Content-Type: application/json\" -d \"{\\\\\"message\\\\\":\\\\\"hello\\\\\",\\\\\"user_id\\\\\":\\\\\"test\\\\\"}\" --connect-timeout 5 --max-time 30)",
+      "Bash(curl -s http://localhost:5000/api/chat -X POST -H \"Content-Type: application/json\" -d \"{\\\\\"query\\\\\":\\\\\"你好\\\\\",\\\\\"user_id\\\\\":\\\\\"test\\\\\"}\" --connect-timeout 5 --max-time 30)",
+      "Bash(PYTHONIOENCODING=utf-8 /d/Anaconda_envs/envs/multi_agent/python.exe -m uvicorn app_main:app --host 0.0.0.0 --port 5000 --reload)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5000/api/chat -X POST -H \"Content-Type: application/json\" -d '{\"query\":\"test\",\"user_id\":\"test\"}' --max-time 5)",
+      "Bash(curl -s http://localhost:5000/api/chat -X POST -H \"Content-Type: application/json\" -d '{\"query\":\"ecs产品有哪些规格？\",\"user_id\":\"test\"}' --max-time 10)",
+      "Bash(netstat -ano)",
+      "Bash(curl -s -X POST \"http://localhost:5000/api/chat\" -H \"Content-Type: application/json\" --data-raw \"{\\\\\"query\\\\\":\\\\\"ecs产品有哪些规格？\\\\\",\\\\\"user_id\\\\\":\\\\\"test\\\\\"}\" --max-time 15)",
+      "Bash(kill -f uvicorn)",
+      "Bash(kill 18600 20972)",
+      "Bash(PYTHONIOENCODING=utf-8 nohup /d/Anaconda_envs/envs/multi_agent/python.exe -m uvicorn app_main:app --host 0.0.0.0 --port 5000 --reload)",
+      "Bash(echo \"Started PID: $!\")",
+      "Read(//tmp/**)",
+      "Bash(curl -s -X POST \"http://localhost:5000/api/chat\" -H \"Content-Type: application/json\" --data-raw \"{\\\\\"query\\\\\":\\\\\"ecs产品有哪些规格？\\\\\",\\\\\"user_id\\\\\":\\\\\"test\\\\\"}\" --max-time 30)",
+      "Bash(python3 -c ' *)",
+      "Bash(kill 41076)",
+      "Bash(nohup npm run dev -- --host 0.0.0.0)",
+      "Bash(echo \"PID: $!\")",
+      "Bash(kill 16216)",
+      "Bash(curl -s -X OPTIONS \"http://localhost:5000/api/chat\" -H \"Origin: http://localhost:5173\" -H \"Access-Control-Request-Method: POST\" -H \"Access-Control-Request-Headers: content-type\" -o /dev/null -w \"HTTP %{http_code}, CORS headers: %{header_vary}, Allow: %{header_allow}\")",
+      "Bash(kill 16216 76444 45280)",
+      "Bash(taskkill /F /PID 16216)",
+      "Bash(taskkill /F /PID 76444)",
+      "Bash(taskkill /F /PID 45280)",
+      "Bash(tasklist /FI \"PID eq 16216\" /NH)",
+      "Bash(tasklist /FI \"PID eq 76444\" /NH)",
+      "Bash(tasklist /FI \"PID eq 45280\" /NH)",
+      "Bash(cmd.exe /c \"taskkill /F /PID 16216 && taskkill /F /PID 76444\")",
+      "Bash(ps -p 16216 -p 76444 -o pid,comm)",
+      "Read(//proc/16216/**)"
+    ]
+  }
+}
