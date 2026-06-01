@@ -4,13 +4,20 @@
 检索使用余弦相似度搜索，并按 user_id 进行过滤，因此每个用户的记忆保持隔离。
 """
 
+import asyncio
 import logging
 from typing import Any
+
+from config import get_settings
 
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "long_term_memory"
-EMBEDDING_DIM = 1536  
+def _get_embedding_dim() -> int:
+    return get_settings().embedding_dim
+
+DEDUP_COSINE_THRESHOLD = 0.90  # skip insert if similarity > 0.90
+
 
 
 class LongTermMemory:
@@ -107,17 +114,42 @@ class LongTermMemory:
         if not self._available:
             return
         try:
+            loop = asyncio.get_running_loop()
             embedding = await self._embeddings.aembed_query(content)
-            self._client.insert(
-                collection_name=COLLECTION_NAME,
-                data=[
-                    {
-                        "user_id": user_id,
-                        "content": content,
-                        "memory_type": memory_type,
-                        "embedding": embedding,
-                    }
-                ],
+            # Dedup: check cosine similarity before inserting
+            user_filter = 'user_id == "' + user_id + '"'
+            existing = await loop.run_in_executor(
+                None,
+                lambda: self._client.search(
+                    collection_name=COLLECTION_NAME,
+                    data=[embedding],
+                    filter=user_filter,
+                    limit=1,
+                    output_fields=["content"],
+                ),
+            )
+            if existing and existing[0]:
+                top_hit = existing[0][0]
+                if top_hit.get("distance", 0) >= DEDUP_COSINE_THRESHOLD:
+                    logger.debug(
+                        "LongTermMemory: dedup skipped (similarity %.4f >= %.2f) for user %s: %s",
+                        top_hit["distance"], DEDUP_COSINE_THRESHOLD, user_id, content[:60],
+                    )
+                    return
+
+            await loop.run_in_executor(
+                None,
+                lambda: self._client.insert(
+                    collection_name=COLLECTION_NAME,
+                    data=[
+                        {
+                            "user_id": user_id,
+                            "content": content,
+                            "memory_type": memory_type,
+                            "embedding": embedding,
+                        }
+                    ],
+                ),
             )
             logger.debug(
                 "LongTermMemory: stored %s memory for user %s: %s",
@@ -155,13 +187,17 @@ class LongTermMemory:
         if not self._available:
             return []
         try:
+            loop = asyncio.get_running_loop()
             query_embedding = await self._embeddings.aembed_query(query)
-            results = self._client.search(
-                collection_name=COLLECTION_NAME,
-                data=[query_embedding],
-                filter=f'user_id == "{user_id}"',
-                limit=top_k,
-                output_fields=["content", "memory_type"],
+            results = await loop.run_in_executor(
+                None,
+                lambda: self._client.search(
+                    collection_name=COLLECTION_NAME,
+                    data=[query_embedding],
+                    filter=f'user_id == "{user_id}"',
+                    limit=top_k,
+                    output_fields=["content", "memory_type"],
+                ),
             )
             memories: list[str] = []
             for hits in results:
@@ -193,7 +229,7 @@ class LongTermMemory:
         schema.add_field("user_id", DataType.VARCHAR, max_length=128)
         schema.add_field("content", DataType.VARCHAR, max_length=2048)
         schema.add_field("memory_type", DataType.VARCHAR, max_length=64)
-        schema.add_field("embedding", DataType.FLOAT_VECTOR, dim=EMBEDDING_DIM)
+        schema.add_field("embedding", DataType.FLOAT_VECTOR, dim=_get_embedding_dim())
 
         index_params = self._client.prepare_index_params()
         index_params.add_index(

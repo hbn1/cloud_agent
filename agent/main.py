@@ -1,4 +1,4 @@
-"""多智能体云客服系统的主入口。
+﻿"""多智能体云客服系统的主入口。
 
 该模块提供了一个 CLI 接口，用于与基于 LangGraph 的多智能体系统进行交互，
 并集成了 FastMCP 工具和长/短期内存。
@@ -30,10 +30,25 @@ if hasattr(sys.stdin, 'reconfigure'):
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
+from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
 from config import get_settings
 from core.memory import MemoryManager
 from core.workflow.graph_manager import AgentGraphManager
 from core.workflow.state import AgentState
+from core.security import security_gate
+
+
+def get_chat_llm():
+    """Get a shared ChatOpenAI instance for memory extraction tasks."""
+    settings = get_settings()
+    api_key = settings.dashscope_api_key
+    return ChatOpenAI(
+        api_key=SecretStr(api_key) if api_key else None,
+        model=settings.model,
+        base_url=settings.base_url or "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        temperature=0.0,
+    )
 
 
 def setup_logging(log_level: str = "INFO") -> None:
@@ -100,7 +115,10 @@ async def run_interactive_mode(
         "session_id": session_id,
         "memory_context": "",
         "next_agent": "",
-        "metadata": {}
+        "metadata": {},
+        "loop_count": 0,
+        "agent_trajectory": [],
+        "guardrail_triggered": False
     }
     
     turn_count = 0
@@ -125,7 +143,15 @@ async def run_interactive_mode(
             mem_context = await _extract_memory_context(memory, user_id, session_id, user_input)
             
             # 使用新输入和内存更新状态
-            state["messages"].append(("user", user_input))
+            # L1 Security: sanitize input
+            clean_input, security_flags, blocked = security_gate.sanitize(user_input)
+            if blocked:
+                print(f"\n[Security] Input blocked: {security_flags}")
+                print("[Agent] AI: 您的消息包含不安全的输入，已被拦截。如有疑问请联系客服。\n")
+                continue
+            if security_flags:
+                print(f"[Security] PII redacted: {security_flags}")
+            state["messages"].append(("user", clean_input))
             state["memory_context"] = mem_context
 
             # 2. 执行图
@@ -150,7 +176,9 @@ async def run_interactive_mode(
             turn_count += 1
             if turn_count % 5 == 0:
                 print("🔄 [Background] Triggering long-term memory extraction...")
-                asyncio.create_task(memory.extract_and_save_preferences(user_id, session_id))
+                task = asyncio.create_task(memory.background_extract(user_id, session_id, llm=get_chat_llm()))
+                background_tasks.add(task)
+                task.add_done_callback(background_tasks.discard)
 
     except KeyboardInterrupt:
         print("\n\n👋 Goodbye!")
@@ -160,7 +188,7 @@ async def run_interactive_mode(
     finally:
         print("\n" + "-" * 60)
         print("💾 Saving session preferences to long-term memory...")
-        await memory.extract_and_save_preferences(user_id, session_id)
+        await memory.finalize_session(user_id, session_id, llm=get_chat_llm())
         print("[OK] Session finalized.")
         print("-" * 60 + "\n")
 
@@ -194,7 +222,7 @@ async def main() -> None:
     await memory.initialize()
     
     # 初始化图管理器
-    graph_manager = AgentGraphManager()
+    graph_manager = AgentGraphManager(memory_manager=memory)
     
     try:
         if args.query:
@@ -207,7 +235,10 @@ async def main() -> None:
                 "session_id": session_id,
                 "memory_context": mem_context,
                 "next_agent": "",
-                "metadata": {}
+                "metadata": {},
+                "loop_count": 0,
+                "agent_trajectory": [],
+                "guardrail_triggered": False
             }
             print(f"\n👤 User: {args.query}")
             result = await graph.ainvoke(state)

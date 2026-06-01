@@ -18,6 +18,7 @@ from pydantic import SecretStr
 
 from tools.vector_tool import query_vector_db
 from tools.graph_tool import query_knowledge_graph
+from tools.user_profile_tool import get_user_profile
 from core.workflow.state import AgentState
 from typing import Dict, Any
 
@@ -74,7 +75,7 @@ class ProductAgentNode:
             ),
             temperature=0.1,
         )
-        self.tools = [query_vector_db, query_knowledge_graph]
+        self.tools = [query_vector_db, query_knowledge_graph, get_user_profile]
 
         # 编译一次，重复使用
         self.inner_agent = create_react_agent(

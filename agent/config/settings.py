@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     neo4j_password: str = Field(default="password", alias="NEO4J_PASSWORD")
     neo4j_database: str = Field(default="neo4j", alias="NEO4J_DATABASE")
     
+    # Embedding
+    embedding_dim: int = Field(default=1536, alias="EMBEDDING_DIM")
+    
     # Logging
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     

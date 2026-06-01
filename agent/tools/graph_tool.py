@@ -97,8 +97,10 @@ def _fallback_graph_keyword_search(query: str) -> str:
     # Neo4j 无法在 ANY/WHERE 中动态解包 $keywords 列表用于 CONTAINS 匹配，
     # 因此这里我们采用在 Python 中拼接 OR 语句的简单模式
     
+    # Sanitize: escape single quotes in keywords to prevent Cypher injection
+    safe_keywords = [k.replace("'", "''").replace('"', '""') for k in keywords]
     where_clauses = []
-    for k in keywords:
+    for k in safe_keywords:
         where_clauses.append(f"toLower(coalesce(n.id, '')) CONTAINS '{k}' OR toLower(coalesce(n.name, '')) CONTAINS '{k}' OR toLower(coalesce(n.description, '')) CONTAINS '{k}'")
     node_where = " OR ".join(where_clauses)
     
@@ -110,7 +112,7 @@ def _fallback_graph_keyword_search(query: str) -> str:
     """
     
     rel_where_clauses = []
-    for k in keywords:
+    for k in safe_keywords:
         rel_where_clauses.append(f"toLower(coalesce(a.id, '')) CONTAINS '{k}' OR toLower(coalesce(a.name, '')) CONTAINS '{k}' OR toLower(coalesce(b.id, '')) CONTAINS '{k}' OR toLower(coalesce(b.name, '')) CONTAINS '{k}'")
     rel_where = " OR ".join(rel_where_clauses)
 

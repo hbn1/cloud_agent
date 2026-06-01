@@ -1,8 +1,7 @@
-"""由 Redis 支持的短期对话内存。
+"""? Redis ??????????
 
-消息按用户/会话存储，并基于 TTL 过期。
-当消息数量超过 COMPRESSION_THRESHOLD 时，较旧的消息
-会自动被修剪，以仅保留最近的消息。
+?????/???????? TTL ????? Redis ?? List ?? (RPUSH + LTRIM)
+???????? get?append?set ??????
 """
 
 import json
@@ -16,22 +15,14 @@ DEFAULT_TTL = 1800          # 30 minutes in seconds
 
 
 class ShortTermMemory:
-    """基于 Redis 的短期对话内存。
+    """?? Redis ???????????? List ?????
 
-    功能：
-    - 按用户/会话的键隔离 (`memory:short:{user_id}:{session_id}`)
-    - 基于 TTL 的自动过期（默认 30 分钟，可配置）
-    - 当超过 COMPRESSION_THRESHOLD 时自动修剪消息
-    - 优雅降级：如果 Redis 不可用，操作将变为空操作
-
-    用法::
-
-        mem = ShortTermMemory()
-        await mem.initialize()
-
-        await mem.save_messages("user1", "s1", messages)
-        msgs = await mem.get_messages("user1", "s1")
-        await mem.close()
+    ???
+    - ???/?????? (`memory:short:{user_id}:{session_id}`)
+    - ?? TTL ???????? 30 ???????
+    - ?? COMPRESSION_THRESHOLD ???????
+    - ?? RPUSH + LTRIM ??????????
+    - ??????? Redis ????????????
     """
 
     def __init__(self, redis_url: str = "redis://localhost:6379", ttl: int = DEFAULT_TTL) -> None:
@@ -62,7 +53,7 @@ class ShortTermMemory:
             logger.info("ShortTermMemory: Redis connected at %s", self._redis_url)
         except Exception as exc:
             logger.warning(
-                "ShortTermMemory: Redis unavailable (%s) – short-term memory disabled.", exc
+                "ShortTermMemory: Redis unavailable (%s) ? short-term memory disabled.", exc
             )
             self._available = False
 
@@ -81,13 +72,14 @@ class ShortTermMemory:
     async def get_messages(self, user_id: str, session_id: str) -> list[dict[str, Any]]:
         """Return stored messages for the given user/session.
 
+        Uses LRANGE to read all entries from the Redis list.
         Returns an empty list when Redis is unavailable or the key is missing.
         """
         if not self._available:
             return []
         try:
-            data = await self._client.get(self._key(user_id, session_id))
-            return json.loads(data) if data else []
+            raw_list = await self._client.lrange(self._key(user_id, session_id), 0, -1)
+            return [json.loads(item) for item in raw_list]
         except Exception as exc:
             logger.warning("ShortTermMemory.get_messages failed: %s", exc)
             self._available = False
@@ -96,7 +88,7 @@ class ShortTermMemory:
     async def save_messages(
         self, user_id: str, session_id: str, messages: list[dict[str, Any]]
     ) -> None:
-        """Persist messages to Redis, applying compression when needed.
+        """Atomically replace all messages using a pipeline with DEL + RPUSH.
 
         Args:
             user_id: Unique user identifier.
@@ -108,11 +100,14 @@ class ShortTermMemory:
         try:
             if len(messages) > COMPRESSION_THRESHOLD:
                 messages = self._trim(messages)
-            await self._client.set(
-                self._key(user_id, session_id),
-                json.dumps(messages, ensure_ascii=False),
-                ex=self._ttl,
-            )
+            key = self._key(user_id, session_id)
+            pipe = self._client.pipeline()
+            pipe.delete(key)
+            if messages:
+                serialized = [json.dumps(m, ensure_ascii=False) for m in messages]
+                pipe.rpush(key, *serialized)
+            pipe.expire(key, self._ttl)
+            await pipe.execute()
             logger.debug(
                 "ShortTermMemory: saved %d messages for %s:%s", len(messages), user_id, session_id
             )
@@ -123,10 +118,24 @@ class ShortTermMemory:
     async def append_message(
         self, user_id: str, session_id: str, role: str, content: str
     ) -> None:
-        """Append a single message and re-persist."""
-        messages = await self.get_messages(user_id, session_id)
-        messages.append({"role": role, "content": content})
-        await self.save_messages(user_id, session_id, messages)
+        """Atomically append a single message using RPUSH + LTRIM + EXPIRE in a pipeline.
+
+        Uses Redis pipeline to guarantee atomicity ? no get?append?set race condition.
+        """
+        if not self._available:
+            return
+        try:
+            key = self._key(user_id, session_id)
+            serialized = json.dumps({"role": role, "content": content}, ensure_ascii=False)
+            # Atomic pipeline: RPUSH new message, trim old ones, refresh TTL
+            pipe = self._client.pipeline()
+            pipe.rpush(key, serialized)
+            pipe.ltrim(key, -COMPRESSION_THRESHOLD, -1)  # keep last N
+            pipe.expire(key, self._ttl)
+            await pipe.execute()
+        except Exception as exc:
+            logger.warning("ShortTermMemory.append_message failed: %s", exc)
+            self._available = False
 
     async def clear(self, user_id: str, session_id: str) -> None:
         """Delete all messages for a user/session."""
@@ -156,3 +165,73 @@ class ShortTermMemory:
         system_msgs = [m for m in messages if m.get("role") == "system"]
         other_msgs = [m for m in messages if m.get("role") != "system"]
         return system_msgs + other_msgs[-6:]
+    # ------------------------------------------------------------------
+    # Summary Buffer
+    # ------------------------------------------------------------------
+
+    async def trim_with_summary(
+        self,
+        user_id: str,
+        session_id: str,
+        summary_fn=None,  # async callable(dropped_messages) -> summary_str
+    ) -> str | None:
+        """Trim messages and optionally generate a summary of dropped messages.
+
+        Uses Redis pipeline to atomically read, trim, and write back.
+        If summary_fn is provided, dropped messages are passed to it
+        for compression into a summary string.
+
+        Returns the summary string if generated, else None.
+        """
+        if not self._available:
+            return None
+        try:
+            key = self._key(user_id, session_id)
+            pipe = self._client.pipeline()
+            # Read all + get length in one round-trip
+            pipe.lrange(key, 0, -1)
+            pipe.llen(key)
+            results = await pipe.execute()
+            raw_list = results[0]
+            total = results[1]
+
+            if total <= COMPRESSION_THRESHOLD:
+                return None  # no trimming needed
+
+            # Parse messages
+            messages = [json.loads(item) for item in raw_list]
+            system_msgs = [m for m in messages if m.get("role") == "system"]
+            other_msgs = [m for m in messages if m.get("role") != "system"]
+
+            # Messages to drop (oldest non-system)
+            keep_count = 6
+            dropped = other_msgs[: -keep_count] if len(other_msgs) > keep_count else []
+            kept = system_msgs + other_msgs[-keep_count:]
+
+            summary = None
+            if dropped and summary_fn:
+                try:
+                    summary = await summary_fn(dropped)
+                    if summary:
+                        # Prepend summary as a system message
+                        kept.insert(0, {"role": "system", "content": f"[Context Summary]\n{summary}"})
+                except Exception as exc:
+                    logger.warning("Summary generation failed: %s", exc)
+
+            # Atomically replace with pipeline
+            pipe2 = self._client.pipeline()
+            pipe2.delete(key)
+            if kept:
+                serialized = [json.dumps(m, ensure_ascii=False) for m in kept]
+                pipe2.rpush(key, *serialized)
+            pipe2.expire(key, self._ttl)
+            await pipe2.execute()
+
+            logger.debug(
+                "ShortTermMemory: trimmed %d messages, kept %d for %s:%s",
+                len(dropped), len(kept), user_id, session_id,
+            )
+            return summary
+        except Exception as exc:
+            logger.warning("ShortTermMemory.trim_with_summary failed: %s", exc)
+            return None

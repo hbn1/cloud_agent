@@ -5,91 +5,57 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from core.workflow.state import AgentState
-from typing import Dict, Any, cast # 导入 cast
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from agents.billing_agent import UserIdInjector
-from tools.vector_tool import query_vector_db
+from typing import Dict, Any, cast
 from pydantic import SecretStr
-# 导入 RunnableConfig 用于类型提示
-from langchain_core.runnables import RunnableConfig 
+from langchain_core.runnables import RunnableConfig
+from core.mcp.mcp_pool import get_mcp_pool
 
 class RecommendationAgent:
-    """
-    智能推荐 Agent：负责根据用户的业务需求（类型、预算、并发等）进行云产品选型与推荐。
-    它会调用向量数据库了解产品特性，并结合 MCP 获取真实可用的商品列表。
-    """
+    """Intelligent recommendation Agent for cloud product selection."""
     def __init__(self):
         dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), '.env')
         load_dotenv(dotenv_path)
 
-        # 2. 获取 api_key 并包装为 SecretStr
         api_key = os.getenv("DASHSCOPE_API_KEY")
         
         self.llm = ChatOpenAI(
-            # 如果 api_key 存在则包装，否则保持 None (取决于具体模型提供商是否允许无key运行，通常必须提供)
             api_key=SecretStr(api_key) if api_key else None,
             model=os.getenv("MODEL", "qwen-plus"),
             base_url=os.getenv("BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-            temperature=0.3, # 推荐场景需要一点灵活性，但不宜过高
+            temperature=0.3,
         )
-        
-        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config', 'mcp_servers.json')
-        with open(config_path, 'r', encoding='utf-8') as f:
-            self.servers_config = json.load(f)
-
-        # 解析 MCP Server cwd 和 command 为绝对路径
-        agent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        for name, cfg in self.servers_config.get("mcpServers", {}).items():
-            if cfg.get("cwd") and cfg["cwd"] == ".":
-                cfg["cwd"] = agent_dir
-            if cfg.get("command") and cfg["command"] == "python":
-                cfg["command"] = sys.executable
 
     async def __call__(self, state: AgentState) -> Dict[str, Any]:
         memory_context = state.get("memory_context", "")
         
-        # 构建符合 RunnableConfig 类型的配置对象
-        # RunnableConfig 是一个 TypedDict，结构为 {'configurable': dict, ...}
         runnable_config: RunnableConfig = {
             "configurable": {"user_id": state.get("user_id", "unknown")}
         }
         
-        # 获取 MCP 工具（用于拉取商品库）
-        client = MultiServerMCPClient(
-            connections=self.servers_config.get("mcpServers", {}),
-            tool_interceptors=[UserIdInjector()]
-        )
-        all_tools = await client.get_tools()
-        # 我们需要 search_product_catalog 和 get_promotable_products 来拉取商品
-        # 并引入 get_promotion_materials 获取最终的下单/推广链接
-        target_tools = ["get_promotable_products", "search_product_catalog", "get_promotion_materials"]
-        mcp_tools = [t for t in all_tools if t.name in target_tools]
+        pool = await get_mcp_pool()
+        mcp_tools = await pool.get_tools(["get_promotable_products", "search_product_catalog", "get_promotion_materials"], caller_agent="recommendation_agent")
         
-        # 组合向量工具与 MCP 工具
+        from tools.vector_tool import query_vector_db
         tools = [query_vector_db] + mcp_tools
 
-        system_prompt = f"""你是一个资深的云架构师和【智能推荐Agent】。
-你的任务是根据用户的业务场景（如：Java+MySQL、高并发、特定预算），推荐最合适的云产品型号。
+        system_prompt = f"""You are a senior cloud architect and intelligent recommendation Agent.
+Your task is to recommend the most suitable cloud products based on user business scenarios.
 
-【工作流程】
-1. 分析用户的业务需求（业务类型、日活/并发、预算、地域等）。如果用户只是单纯询问“有哪些产品”，请跳过分析，直接展示当前平台的商品库。
-2. (必须) 调用 [get_promotable_products](file://d:\desktop\cloud_agent\agent\mcp_servers\cloud_platform_server.py#L71-L90) 或 [search_product_catalog](file://d:\desktop\cloud_agent\agent\mcp_servers\cloud_platform_server.py#L93-L120) 获取当前平台可供推荐和购买的真实商品列表。
-3. 如果是选型推荐，调用 [query_vector_db](file://d:\desktop\cloud_agent\agent\tools\vector_tool.py#L59-L79) 检索相关规格（如 c7, g8a）的技术特性和适用场景。
-4. 为用户精选 1-3 款最合适的商品，并给出专业的推荐理由（为什么选这款，满足了用户的什么痛点）。如果是询问列表，直接结构化列出。
-5. (非常重要) 在推荐结论中，针对你推荐的商品，调用 [get_promotion_materials](file://d:\desktop\cloud_agent\agent\mcp_servers\cloud_platform_server.py#L393-L449) 获取购买/活动链接，并在最终回复中附上这些直接购买链接。
+Workflow:
+1. Analyze user requirements (business type, concurrency, budget, region).
+2. Call get_promotable_products or search_product_catalog for current catalog.
+3. For selection recommendations, call query_vector_db for technical specs.
+4. Recommend 1-3 best-fit products with professional reasoning.
+5. Call get_promotion_materials for purchase links.
 
-【回答要求】
-- 语气要像专业且热情的云架构师顾问。
-- 必须包含具体的实例型号或产品名称。
-- 必须条理清晰（使用列表、加粗）。
-- 绝不要推荐 [get_promotable_products](file://d:\desktop\cloud_agent\agent\mcp_servers\cloud_platform_server.py#L71-L90) 列表中不存在的虚构商品。
-- 每次回答结尾，只需列出实际获取到数据的来源，格式如下：
-  答案来源：
-  - 向量检索：xxx.md
-  （不要输出“未使用”的工具或“可信度”）
+Requirements:
+- Professional and enthusiastic tone.
+- Include specific instance types/product names.
+- Never recommend products not in the catalog.
+- List sources at the end.
 
-【系统提供的用户记忆/背景上下文】:
-{memory_context if memory_context else "暂无背景上下文。"}
+[Background Context]:
+{memory_context if memory_context else "No background context."}
 """
         inner_agent = create_react_agent(
             model=self.llm,
@@ -97,11 +63,11 @@ class RecommendationAgent:
             prompt=system_prompt
         )
         
-        print("[Search] [RecommendationAgent] 正在进行智能产品选型与推荐...")
+        print("[Search] [RecommendationAgent] Performing intelligent product selection...")
         
         result = await inner_agent.ainvoke(
             {"messages": state["messages"]},
-            config=runnable_config # 使用类型明确的变量
+            config=runnable_config
         )
         final_message = result["messages"][-1]
         return {"messages": [final_message]}
