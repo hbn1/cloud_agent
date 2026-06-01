@@ -128,16 +128,27 @@
             @keydown.enter.prevent="handleEnter"
             :disabled="isLoading"
           />
-          <el-button 
-            type="primary" 
-            class="send-btn" 
-            :icon="Position" 
-            :loading="isLoading"
-            @click="sendQuery(inputQuery)"
-            :disabled="!inputQuery.trim()"
-          >
-            发送
-          </el-button>
+          <div class="input-actions">
+            <el-button
+              v-if="isLoading"
+              type="danger"
+              class="stop-btn"
+              :icon="CircleClose"
+              @click="stopGeneration"
+            >
+              停止思考
+            </el-button>
+            <el-button
+              v-else
+              type="primary"
+              class="send-btn"
+              :icon="Position"
+              @click="sendQuery(inputQuery)"
+              :disabled="!inputQuery.trim()"
+            >
+              发送
+            </el-button>
+          </div>
         </div>
       </el-main>
     </el-container>
@@ -146,12 +157,13 @@
 
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted } from 'vue'
-import { Plus, ChatDotRound, Service, Position, Loading, Monitor, List, DataLine, Share, Close } from '@element-plus/icons-vue'
+import { Plus, ChatDotRound, Service, Position, Loading, Monitor, List, DataLine, Share, Close, CircleClose } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 
 // 状态定义
 const inputQuery = ref('')
 const isLoading = ref(false)
+const abortController = ref<AbortController | null>(null)
 const messageListRef = ref<HTMLElement | null>(null)
 const currentSessionId = ref('session_default_1')
 
@@ -255,6 +267,32 @@ const handleEnter = (e: KeyboardEvent) => {
   }
 }
 
+const stopGeneration = () => {
+  // 1. 中止前端 fetch 连接
+  if (abortController.value) {
+    abortController.value.abort()
+    abortController.value = null
+  }
+  // 2. 通知后端取消（防止后台 Agent 继续运行）
+  fetch('http://127.0.0.1:5000/api/chat/stop', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      session_id: currentSessionId.value,
+      user_id: 'user_1001'
+    })
+  }).catch(() => {/* ignore */})
+  // 3. 移除当前不完整的助手消息
+  const msgStore = sessionMessages.value[currentSessionId.value]
+  if (msgStore && msgStore.length > 0) {
+    const lastMsg = msgStore[msgStore.length - 1]
+    if (lastMsg.role === 'assistant' && !lastMsg.content) {
+      msgStore.pop()
+    }
+  }
+  isLoading.value = false
+}
+
 const sendQuery = async (query: string) => {
   if (!query.trim()) return
   
@@ -278,11 +316,15 @@ const sendQuery = async (query: string) => {
 
   isLoading.value = true
 
+  // 创建 AbortController 用于取消请求
+  const controller = new AbortController()
+  abortController.value = controller
+
   // 预先创建一个空的助手消息，用于接收流式数据
   const assistantMessage: Message = { role: 'assistant', content: '' }
   msgStore.push(assistantMessage)
   const currentMsgIndex = msgStore.length - 1
-  
+
   try {
     // 调用 FastAPI 后端接口并使用 fetch 接收 SSE 流
     const response = await fetch('http://127.0.0.1:5000/api/chat', {
@@ -294,7 +336,8 @@ const sendQuery = async (query: string) => {
         query: text,
         user_id: 'user_1001',
         session_id: currentSessionId.value
-      })
+      }),
+      signal: controller.signal
     })
     
     if (!response.ok) {
@@ -330,6 +373,13 @@ const sendQuery = async (query: string) => {
               if (data.done) {
                 // 流传输完成
               }
+              if (data.cancelled) {
+                // 后端取消了生成，移除空消息
+                if (messages.value[currentMsgIndex] && !messages.value[currentMsgIndex].content) {
+                  const store = sessionMessages.value[currentSessionId.value]
+                  if (store) store.pop()
+                }
+              }
             } catch (e) {
               console.error('Error parsing SSE data:', e, dataStr)
             }
@@ -337,12 +387,18 @@ const sendQuery = async (query: string) => {
         }
       }
     }
-  } catch (error) {
-    console.error('API Error:', error)
-    if (messages.value[currentMsgIndex]) {
-      messages.value[currentMsgIndex].content = '❌ 请求失败，请检查后端服务是否启动 (FastAPI port 5000)。'
+  } catch (error: any) {
+    if (error.name === 'AbortError') {
+      // 用户手动取消，不做额外处理（stopGeneration 已移除空消息）
+      console.log('[Stop] 用户取消了生成')
+    } else {
+      console.error('API Error:', error)
+      if (messages.value[currentMsgIndex]) {
+        messages.value[currentMsgIndex].content = '❌ 请求失败，请检查后端服务是否启动 (FastAPI port 5000)。'
+      }
     }
   } finally {
+    abortController.value = null
     isLoading.value = false
     persistSessions()
     scrollToBottom()
@@ -612,13 +668,19 @@ const sendQuery = async (query: string) => {
   padding: 16px 28px 20px;
   background: #ffffff;
   border-top: 1px solid #e7edf7;
+}
+.input-actions {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 12px;
 }
 .send-btn {
-  align-self: flex-end;
   width: 110px;
+  border-radius: 10px;
+}
+.stop-btn {
+  width: 130px;
   border-radius: 10px;
 }
 

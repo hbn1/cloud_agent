@@ -11,3 +11,7 @@ class ChatResponse(BaseModel):
     reply: str
     user_id: str
     session_id: str
+
+class StopChatRequest(BaseModel):
+    user_id: str = "user_1001"
+    session_id: str = "default_session"

@@ -1,8 +1,3 @@
-"""
- * 小滴课堂,愿景：让技术不再难学
- * @Remark 有问题联系我【xdclass68】
- * 源码-笔记-技术交流群,官网 https://xdclass.net
-"""
 import os
 import sys
 import json
@@ -11,6 +6,10 @@ from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from typing import Dict, Any
+# 1. 导入 SecretStr
+from pydantic import SecretStr
+# 新增导入：用于解决 config 类型问题
+from langchain_core.runnables import RunnableConfig
 
 from core.workflow.state import AgentState
 from agents.billing_agent import UserIdInjector
@@ -24,8 +23,12 @@ class FinOpsAgentNode:
         dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), '.env')
         load_dotenv(dotenv_path)
 
+        # 2. 获取 api_key 并包装为 SecretStr
+        api_key = os.getenv("DASHSCOPE_API_KEY")
+        
         self.llm = ChatOpenAI(
-            api_key=os.getenv("DASHSCOPE_API_KEY"),
+            # 3. 使用 SecretStr 包裹，如果 api_key 为 None 则保持 None (视具体库版本兼容性，通常建议确保有值或处理 None)
+            api_key=SecretStr(api_key) if api_key else None,
             model=os.getenv("MODEL", "qwen-plus"),
             base_url=os.getenv("BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
             temperature=0.1, 
@@ -47,7 +50,8 @@ class FinOpsAgentNode:
         pass
 
     async def __call__(self, state: AgentState) -> Dict[str, Any]:
-        config = {"configurable": {"user_id": state.get("user_id", "unknown")}}
+        # 使用 RunnableConfig 构建配置对象，以符合类型要求
+        config: RunnableConfig = {"configurable": {"user_id": state.get("user_id", "unknown")}}
 
         client = MultiServerMCPClient(
             connections=self.servers_config.get("mcpServers", {}),
@@ -62,8 +66,8 @@ class FinOpsAgentNode:
 
 你的任务：
 1. 仔细阅读上下文中的对话历史，优先提取用户想要优化的**实例 ID (instance_id)**。
-2. 如果上下文中没有 instance_id，先调用 `query_user_instances` 获取该用户实例列表，并优先选择 Running 状态的 ECS 实例继续分析；如果有多台实例，可先给出清单并建议用户指定目标。
-3. 调用 `analyze_instance_usage` 工具获取目标实例近期 CPU、内存等监控数据。
+2. 如果上下文中没有 instance_id，先调用 [query_user_instances](file://d:\desktop\cloud_agent\agent\mcp_servers\cloud_platform_server.py#L290-L318) 获取该用户实例列表，并优先选择 Running 状态的 ECS 实例继续分析；如果有多台实例，可先给出清单并建议用户指定目标。
+3. 调用 [analyze_instance_usage](file://d:\desktop\cloud_agent\agent\mcp_servers\cloud_platform_server.py#L321-L390) 工具获取目标实例近期 CPU、内存等监控数据。
 4. 根据监控数据分析该实例是否存在“资源闲置 (RESOURCES_IDLE)”的情况。
 5. 以云架构师的口吻给用户提出**降本增效建议**：
    - 如果 CPU 长期极低，建议用户将实例降配（例如从 8xlarge 降级为 2xlarge，或从计算型转为通用型）。

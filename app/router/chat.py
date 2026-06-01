@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
-from schemas.chat import ChatRequest
-from service.chat_service import stream_chat
+from schemas.chat import ChatRequest, StopChatRequest
+from service.chat_service import stream_chat, cancel_chat
 
 router = APIRouter()
 
@@ -16,3 +16,9 @@ async def chat_endpoint(request: ChatRequest):
         stream_chat(request.query, request.user_id, request.session_id),
         media_type="text/event-stream"
     )
+
+@router.post("/chat/stop")
+async def stop_chat(request: StopChatRequest):
+    """取消指定会话的正在进行的 AI 生成。"""
+    cancel_chat(request.session_id)
+    return {"status": "cancelled", "session_id": request.session_id}

@@ -1,8 +1,3 @@
-"""
- * 小滴课堂,愿景：让技术不再难学
- * @Remark 有问题联系我【xdclass68】
- * 源码-笔记-技术交流群,官网 https://xdclass.net
-"""
 import os
 import sys
 import json
@@ -10,10 +5,13 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from core.workflow.state import AgentState
-from typing import Dict, Any
+from typing import Dict, Any, cast # 导入 cast
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from agents.billing_agent import UserIdInjector
 from tools.vector_tool import query_vector_db
+from pydantic import SecretStr
+# 导入 RunnableConfig 用于类型提示
+from langchain_core.runnables import RunnableConfig 
 
 class RecommendationAgent:
     """
@@ -24,8 +22,12 @@ class RecommendationAgent:
         dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), '.env')
         load_dotenv(dotenv_path)
 
+        # 2. 获取 api_key 并包装为 SecretStr
+        api_key = os.getenv("DASHSCOPE_API_KEY")
+        
         self.llm = ChatOpenAI(
-            api_key=os.getenv("DASHSCOPE_API_KEY"),
+            # 如果 api_key 存在则包装，否则保持 None (取决于具体模型提供商是否允许无key运行，通常必须提供)
+            api_key=SecretStr(api_key) if api_key else None,
             model=os.getenv("MODEL", "qwen-plus"),
             base_url=os.getenv("BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
             temperature=0.3, # 推荐场景需要一点灵活性，但不宜过高
@@ -45,7 +47,12 @@ class RecommendationAgent:
 
     async def __call__(self, state: AgentState) -> Dict[str, Any]:
         memory_context = state.get("memory_context", "")
-        config = {"configurable": {"user_id": state.get("user_id", "unknown")}}
+        
+        # 构建符合 RunnableConfig 类型的配置对象
+        # RunnableConfig 是一个 TypedDict，结构为 {'configurable': dict, ...}
+        runnable_config: RunnableConfig = {
+            "configurable": {"user_id": state.get("user_id", "unknown")}
+        }
         
         # 获取 MCP 工具（用于拉取商品库）
         client = MultiServerMCPClient(
@@ -66,16 +73,16 @@ class RecommendationAgent:
 
 【工作流程】
 1. 分析用户的业务需求（业务类型、日活/并发、预算、地域等）。如果用户只是单纯询问“有哪些产品”，请跳过分析，直接展示当前平台的商品库。
-2. (必须) 调用 `get_promotable_products` 或 `search_product_catalog` 获取当前平台可供推荐和购买的真实商品列表。
-3. 如果是选型推荐，调用 `query_vector_db` 检索相关规格（如 c7, g8a）的技术特性和适用场景。
+2. (必须) 调用 [get_promotable_products](file://d:\desktop\cloud_agent\agent\mcp_servers\cloud_platform_server.py#L71-L90) 或 [search_product_catalog](file://d:\desktop\cloud_agent\agent\mcp_servers\cloud_platform_server.py#L93-L120) 获取当前平台可供推荐和购买的真实商品列表。
+3. 如果是选型推荐，调用 [query_vector_db](file://d:\desktop\cloud_agent\agent\tools\vector_tool.py#L59-L79) 检索相关规格（如 c7, g8a）的技术特性和适用场景。
 4. 为用户精选 1-3 款最合适的商品，并给出专业的推荐理由（为什么选这款，满足了用户的什么痛点）。如果是询问列表，直接结构化列出。
-5. (非常重要) 在推荐结论中，针对你推荐的商品，调用 `get_promotion_materials` 获取购买/活动链接，并在最终回复中附上这些直接购买链接。
+5. (非常重要) 在推荐结论中，针对你推荐的商品，调用 [get_promotion_materials](file://d:\desktop\cloud_agent\agent\mcp_servers\cloud_platform_server.py#L393-L449) 获取购买/活动链接，并在最终回复中附上这些直接购买链接。
 
 【回答要求】
 - 语气要像专业且热情的云架构师顾问。
 - 必须包含具体的实例型号或产品名称。
 - 必须条理清晰（使用列表、加粗）。
-- 绝不要推荐 `get_promotable_products` 列表中不存在的虚构商品。
+- 绝不要推荐 [get_promotable_products](file://d:\desktop\cloud_agent\agent\mcp_servers\cloud_platform_server.py#L71-L90) 列表中不存在的虚构商品。
 - 每次回答结尾，只需列出实际获取到数据的来源，格式如下：
   答案来源：
   - 向量检索：xxx.md
@@ -94,7 +101,7 @@ class RecommendationAgent:
         
         result = await inner_agent.ainvoke(
             {"messages": state["messages"]},
-            config=config
+            config=runnable_config # 使用类型明确的变量
         )
         final_message = result["messages"][-1]
         return {"messages": [final_message]}

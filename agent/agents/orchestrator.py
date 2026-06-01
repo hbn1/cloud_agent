@@ -1,13 +1,9 @@
-"""
- * 小滴课堂,愿景：让技术不再难学
- * @Remark 有问题联系我【xdclass68】
- * 源码-笔记-技术交流群,官网 https://xdclass.net
-"""
 import os
 from typing import Dict, Any
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from pydantic import SecretStr  # 导入 SecretStr
 
 from core.workflow.state import AgentState
 
@@ -20,9 +16,13 @@ class OrchestratorAgent:
         dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
         load_dotenv(dotenv_path)
 
+        # 获取 API Key
+        api_key = os.getenv("DASHSCOPE_API_KEY")
+        
         # 路由节点不需要复杂的工具，只需一个基础大模型来做分类决策
         self.llm = ChatOpenAI(
-            api_key=os.getenv("DASHSCOPE_API_KEY"),
+            # 使用 SecretStr 包装 api_key 以符合类型要求
+            api_key=SecretStr(api_key) if api_key else None,
             model=os.getenv("MODEL", "qwen-plus"),
             base_url=os.getenv("BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
             temperature=0.1,
@@ -74,13 +74,33 @@ class OrchestratorAgent:
             HumanMessage(content=last_message)
         ])
         
-        decision = response.content.strip().lower()
+               # 获取响应内容，确保其为字符串格式
+        raw_content = response.content
+        
+        # 处理 content 可能为 list 或其他非 str 类型的情况
+        if isinstance(raw_content, str):
+            decision_text = raw_content
+        elif isinstance(raw_content, list):
+            # 如果 content 是列表，通常取第一个元素的文本，或者拼接
+            # 这里假设如果是列表，我们取第一个有效字符串元素
+            decision_text = str(raw_content[0]) if raw_content else ""
+        else:
+            decision_text = str(raw_content)
+
+        # 现在可以安全地调用 strip 和 lower
+        decision = decision_text.strip().lower()
+        
         if "finops" in decision:
             next_node = "billing_agent" # FinOps 流程的第一步是交给 Billing 去查实例
+            # 确保 metadata 存在
+            if "metadata" not in state:
+                state["metadata"] = {}
             state["metadata"]["is_finops_workflow"] = True
             print("[Tool] [Orchestrator] 识别到成本优化意图，触发 FinOps 工作流 (第 1 步: 获取实例数据)")
         elif "billing" in decision:
             next_node = "billing_agent"
+            if "metadata" not in state:
+                state["metadata"] = {}
             state["metadata"]["is_finops_workflow"] = False
             print("[Tool] [Orchestrator] 识别到常规账单查询意图，路由至: billing_agent")
         elif "promotion" in decision:
